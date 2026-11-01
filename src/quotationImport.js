@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { parseZibixoQuotation } from './quotationParser.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -53,32 +54,32 @@ export async function readQuotationPdf(file) {
   }
 
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  const lines = [];
+  const rows = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const pageLines = [];
     for (const item of content.items) {
       if (!('str' in item) || !item.str.trim()) continue;
       const y = item.transform[5];
-      let line = pageLines.find(candidate => Math.abs(candidate.y - y) < 3);
+      let line = rows.find(candidate => candidate.page === pageNumber && Math.abs(candidate.y - y) < 4);
       if (!line) {
-        line = { y, items: [] };
-        pageLines.push(line);
+        line = { page: pageNumber, y, items: [] };
+        rows.push(line);
       }
       line.items.push({ x: item.transform[4], text: item.str });
     }
-    pageLines.sort((a, b) => b.y - a.y);
-    for (const line of pageLines) {
-      line.items.sort((a, b) => a.x - b.x);
-      lines.push(line.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim());
-    }
   }
 
+  rows.sort((a, b) => a.page - b.page || b.y - a.y);
+  for (const row of rows) row.items.sort((a, b) => a.x - b.x);
+  const lines = rows.map(row => row.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim());
   const text = lines.join('\n');
   if (!text.trim()) {
     throw new Error('No selectable text found. This may be a scanned PDF; scanned quotations need OCR.');
   }
+
+  const zibixoInvoice = parseZibixoQuotation(rows);
+  if (zibixoInvoice) return zibixoInvoice;
 
   const items = parseItems(lines);
   if (!items.length) {
