@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { LayoutDashboard, FileText, CreditCard, Users, Settings, Plus, Trash2, Printer, Download, Search, Landmark, UserRound, BriefcaseBusiness, CheckCircle2, ShieldCheck, ArrowUpRight, CircleDollarSign, Clock3, Eye, X, ChevronDown, Save, Copy, Check, ReceiptText, CalendarDays } from 'lucide-react';
+import { LayoutDashboard, FileText, CreditCard, Users, Settings, Plus, Trash2, Printer, Download, Search, Landmark, UserRound, BriefcaseBusiness, CheckCircle2, ShieldCheck, ArrowUpRight, CircleDollarSign, Clock3, Eye, X, ChevronDown, Save, Copy, Check, ReceiptText, CalendarDays, Upload } from 'lucide-react';
 
 const TODAY = new Date().toISOString().slice(0,10);
 const currencies = [
@@ -46,6 +46,8 @@ function App(){
  const [showPreview,setShowPreview] = useState(false);
  const [showPayment,setShowPayment] = useState(false);
  const [statusFilter,setStatusFilter] = useState('All');
+ const [importingQuotation,setImportingQuotation] = useState(false);
+ const quotationInput = useRef(null);
  const active = invoices.find(x=>x.id===activeId) || null;
  const updateActive = fn => setInvoices(old=>old.map(x=>x.id===activeId?fn(x):x));
  const updateField = (key,val) => updateActive(inv=>({...inv,[key]:val}));
@@ -64,10 +66,28 @@ function App(){
  const upiUrl = active && profile.upiId ? `upi://pay?${new URLSearchParams({pa:profile.upiId.trim(),pn:(profile.upiName||profile.businessName).trim(),am:total.toFixed(2),cu:activeCurrency,tn:`Invoice ${active.invoiceNo}`}).toString()}` : '';
  useEffect(()=>{localStorage.setItem('isp-invoices',JSON.stringify(invoices));},[invoices]);
  useEffect(()=>{localStorage.setItem('isp-profile',JSON.stringify(profile));},[profile]);
- const flash = msg => {setNotice(msg);window.setTimeout(()=>setNotice(''),2400)};
+ const flash = msg => {setNotice(msg);window.setTimeout(()=>setNotice(''),4500)};
  function createInvoice(){
    const n = `INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`;
    const inv=blankInvoice(n); setInvoices(old=>[inv,...old]);setActiveId(inv.id);setPage('editor');flash('New invoice created');
+ }
+ async function importQuotation(event){
+   const file=event.target.files?.[0];
+   event.target.value='';
+   if(!file)return;
+   setImportingQuotation(true);
+   try{
+     const {readQuotationPdf}=await import('./quotationImport.js');
+     const quotation=await readQuotationPdf(file);
+     const n=`INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`;
+     const invoice={...blankInvoice(n),...quotation,id:Date.now(),status:'Draft'};
+     setInvoices(old=>[invoice,...old]);setActiveId(invoice.id);setPage('editor');
+     flash('Draft invoice created. Review the imported details before sending.');
+   }catch(error){
+     flash(error instanceof Error ? error.message : 'Could not read the quotation PDF.');
+   }finally{
+     setImportingQuotation(false);
+   }
  }
  function duplicateInvoice(inv){
    const copy={...inv,id:Date.now(),invoiceNo:`INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`,status:'Draft',items:inv.items.map(i=>({...i,id:Date.now()+Math.random()}))};
@@ -95,7 +115,7 @@ function App(){
   <main className="main">
    <header className="topbar no-print"><div className="crumb">WORKSPACE <span>/</span> {page==='editor'?'INVOICE EDITOR':page.toUpperCase()}</div><div className="top-right"><span className="local-badge"><span/> Local data</span><button className="btn btn-primary" onClick={createInvoice}><Plus size={16}/> New invoice</button></div></header>
    {page==='dashboard' && <Dashboard invoices={invoices} totalBilled={totalBilled} outstanding={outstanding} savedInvoices={savedInvoices} onCreate={createInvoice} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onAll={()=>setPage('invoices')}/>}
-   {page==='invoices' && <section><PageHeading title="Invoices" subtitle="Create, manage and track your freelance project billing." action={<button className="btn btn-primary" onClick={createInvoice}><Plus size={16}/> Create invoice</button>}/><div className="toolbar"><div className="searchbox"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search invoice, client or project..."/></div><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All</option><option>Draft</option><option>Sent</option><option>Paid</option><option>Overdue</option></select></div><InvoiceList invoices={filtered} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onDuplicate={duplicateInvoice} onDelete={deleteInvoice}/></section>}
+   {page==='invoices' && <section><PageHeading title="Invoices" subtitle="Create, manage and track your freelance project billing." action={<div className="invoice-create-actions"><input ref={quotationInput} className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={importQuotation}/><button className="btn btn-light" disabled={importingQuotation} onClick={()=>quotationInput.current?.click()}><Upload size={15}/>{importingQuotation?'Reading PDF...':'Import quotation PDF'}</button><button className="btn btn-primary" onClick={createInvoice}><Plus size={16}/> Create invoice</button></div>}/><p className="import-hint">Import a text-based quotation PDF to create a draft invoice. Check every field and amount before sending.</p><div className="toolbar"><div className="searchbox"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search invoice, client or project..."/></div><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All</option><option>Draft</option><option>Sent</option><option>Paid</option><option>Overdue</option></select></div><InvoiceList invoices={filtered} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onDuplicate={duplicateInvoice} onDelete={deleteInvoice}/></section>}
    {page==='editor' && (active ? <Editor active={active} profile={profile} total={calcTotal(active)} subtotal={calcSubtotal(active)} tax={calcTax(active)} onChange={updateField} onItem={updateItem} onAdd={addItem} onRemove={removeItem} onBack={()=>setPage('invoices')} onSave={()=>{flash('Invoice auto-saved in this browser')}} onPreview={()=>setShowPreview(true)} onPayments={()=>setShowPayment(true)} onStatus={markStatus} onDelete={()=>deleteInvoice(active.id)} onDuplicate={()=>duplicateInvoice(active)} upiUrl={upiUrl}/> : <Empty title="No invoice selected" text="Create a new invoice to get started." action={createInvoice}/>)}
    {page==='payments' && <PaymentSetup profile={profile} set={newProfileField} save={()=>flash('Payment settings saved in this browser')}/>}
    {page==='settings' && <ProfileSetup profile={profile} set={newProfileField} save={()=>flash('Business profile saved')}/>}
