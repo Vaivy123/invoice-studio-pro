@@ -102,7 +102,7 @@ function App(){
  const filtered = invoices.filter(inv=>(statusFilter==='All'||inv.status===statusFilter)&&`${inv.invoiceNo} ${inv.clientName} ${inv.projectName}`.toLowerCase().includes(search.toLowerCase()));
  return <div className="app">
   <aside className="sidebar no-print">
-   <div className="brand"><div className="brand-icon"><ReceiptText size={21}/></div><div><strong>Invoice Studio</strong><span>FREELANCE WORKSPACE</span></div></div>
+   <div className="brand"><img className="brand-logo" src="/invoice-studio-logo.svg" alt="Invoice Studio — Freelance Workspace"/><img className="brand-mark" src="/invoice-studio-mark.svg" alt="Invoice Studio"/></div>
    <div className="nav-caption">WORKSPACE</div>
    <Nav active={page==='dashboard'} icon={<LayoutDashboard size={18}/>} onClick={()=>setPage('dashboard')}>Dashboard</Nav>
    <Nav active={page==='invoices'||page==='editor'} icon={<FileText size={18}/>} onClick={()=>setPage('invoices')}>Invoices <span className="nav-count">{invoices.length}</span></Nav>

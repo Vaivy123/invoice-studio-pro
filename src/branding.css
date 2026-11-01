@@ -1,0 +1,33 @@
+.brand {
+  display: block;
+  padding: 0 6px 38px;
+}
+
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.brand-mark {
+  display: none;
+}
+
+@media (max-width: 950px) {
+  .brand {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 35px;
+  }
+
+  .brand-logo {
+    display: none;
+  }
+
+  .brand-mark {
+    display: block;
+    width: 39px;
+    height: 39px;
+    flex-shrink: 0;
+  }
+}

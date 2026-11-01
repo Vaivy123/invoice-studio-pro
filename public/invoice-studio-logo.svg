@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 76" fill="none">
+  <defs>
+    <linearGradient id="brand" x1="5" y1="4" x2="67" y2="69" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#887cff"/>
+      <stop offset="1" stop-color="#6254e7"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="72" height="72" rx="21" fill="url(#brand)"/>
+  <path d="M24 14h17l12 12v32a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V18a4 4 0 0 1 4-4Z" fill="#fff"/>
+  <path d="M41 14v9a3 3 0 0 0 3 3h9" fill="#ddd9ff"/>
+  <path d="M27 36h18M27 43h10" stroke="#958cff" stroke-linecap="round" stroke-width="3.5"/>
+  <path d="m35 51 4 4 8-8" stroke="#6658e9" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.5"/>
+  <text x="88" y="38" fill="#f3f5ff" font-family="Manrope,Arial,sans-serif" font-size="25" font-weight="800" letter-spacing="-.7">Invoice Studio</text>
+  <text x="90" y="58" fill="#aeb8cc" font-family="Arial,sans-serif" font-size="9" font-weight="700" letter-spacing="2">FREELANCE WORKSPACE</text>
+</svg>
