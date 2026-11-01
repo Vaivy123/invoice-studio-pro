@@ -1,0 +1,31 @@
+# Invoice Studio Pro — Freelance Software Invoicing
+
+React + Vite application designed for freelance software developers and project work.
+
+## Features
+- Dashboard with invoice totals, outstanding amount, and recent invoices
+- Invoice list, search, status filters, client list
+- Invoice editor with project, client, issue/due dates, currency, work line items, quantities/hours, rates, discount, tax/GST percentage, notes
+- Multiple currencies: INR, CAD, USD, EUR, GBP, AUD
+- UPI QR payment request generated for invoice currency and total
+- Bank transfer instructions: account holder, bank, account number, IFSC
+- Business profile settings
+- Duplicate invoices and track statuses: Draft, Sent, Paid, Overdue
+- Print / Save as PDF, responsive layout
+- Browser local storage, no server required
+
+## Run in VS Code
+1. Install Node.js LTS.
+2. Extract this ZIP and open `invoice-studio-pro` in VS Code.
+3. Terminal > New Terminal.
+4. Run `npm install`
+5. Run `npm run dev`
+6. Open the local URL Vite prints (usually http://localhost:5173).
+
+## Important limitations
+- Data is stored only in localStorage on this browser. It does not sync across devices, and clearing browser data can remove it. Export/backup and authentication are not implemented.
+- Totals are shown in the invoice's selected currency. Dashboard totals are not exchange-rate-converted and currently aggregate displayed numeric amounts; do not interpret mixed-currency totals as a converted accounting balance.
+- UPI QR uses the selected invoice currency and total. UPI rails commonly expect INR; use the QR only for supported currencies/transactions and verify it with your UPI app. For CAD/USD/EUR etc., prefer bank transfer or an appropriate payment provider unless your UPI provider confirms support.
+- QR generation does not process or confirm payment. Verify funds in your bank/UPI app before marking an invoice Paid.
+- Tax is a manual percentage; verify applicable tax, GST, cross-border invoicing and legal requirements with a qualified professional.
+- Never enter a UPI PIN, OTP, card PIN, or banking password.
