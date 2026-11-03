@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { LayoutDashboard, FileText, CreditCard, Users, Settings, Plus, Trash2, Printer, Download, Search, Landmark, UserRound, BriefcaseBusiness, CheckCircle2, ShieldCheck, ArrowUpRight, CircleDollarSign, Clock3, Eye, X, ChevronDown, Save, Copy, Check, ReceiptText, CalendarDays, Upload, Mail } from 'lucide-react';
+import { LayoutDashboard, FileText, CreditCard, Users, Settings, Plus, Trash2, Download, Search, Landmark, UserRound, BriefcaseBusiness, CheckCircle2, ShieldCheck, ArrowUpRight, CircleDollarSign, Clock3, Eye, X, ChevronDown, Save, Copy, Check, ReceiptText, CalendarDays, Upload, Mail } from 'lucide-react';
+import { calculatePaymentBreakdown } from './invoicePayments.js';
 
 const TODAY = new Date().toISOString().slice(0,10);
 const currencies = [
@@ -25,7 +26,7 @@ const defaultProfile = {
   ifsc:'HDFC0001569'
 };
 const blankInvoice = (number='INV-2026-001') => ({
- id: Date.now(), invoiceNo:number, issueDate:TODAY, dueDate:TODAY, currency:'INR', status:'Draft',
+ id: Date.now(), invoiceNo:number, issueDate:TODAY, dueDate:TODAY, currency:'INR', status:'Draft', amountPaid:0, dueNow:'',
  clientName:'', clientEmail:'', clientAddress:'', projectName:'',
  items:[{id:Date.now()+1, description:'Software development', details:'Development, testing and implementation', quantity:1, rate:1000}],
  taxPercent:0, discount:0, notes:'Thank you for your business. Please include the invoice number with your payment.'
@@ -43,6 +44,7 @@ function App(){
  const [page,setPage] = useState('dashboard');
  const [search,setSearch] = useState('');
  const [notice,setNotice] = useState('');
+ const [pdfDownload,setPdfDownload] = useState(null);
  const [showPreview,setShowPreview] = useState(false);
  const [showPayment,setShowPayment] = useState(false);
  const [statusFilter,setStatusFilter] = useState('All');
@@ -60,12 +62,14 @@ function App(){
  const tax = taxable*(Number(active?.taxPercent||0)/100);
  const total = taxable+tax;
  const savedInvoices = invoices.filter(i=>i.status==='Paid').length;
- const outstanding = invoices.filter(i=>i.status!=='Paid').reduce((sum,i)=>sum+calcTotal(i),0);
+ const outstanding = invoices.filter(i=>i.status!=='Paid').reduce((sum,i)=>sum+calculatePaymentBreakdown(i,calcTotal(i)).balanceBeforeCurrentPayment,0);
  const totalBilled = invoices.reduce((sum,i)=>sum+calcTotal(i),0);
  const activeCurrency = active?.currency || 'INR';
- const upiUrl = active && profile.upiId ? `upi://pay?${new URLSearchParams({pa:profile.upiId.trim(),pn:(profile.upiName||profile.businessName).trim(),am:total.toFixed(2),cu:activeCurrency,tn:`Invoice ${active.invoiceNo}`}).toString()}` : '';
+ const payment = active ? calculatePaymentBreakdown(active,total) : null;
+ const upiUrl = active && profile.upiId && payment?.dueNow>0 ? `upi://pay?${new URLSearchParams({pa:profile.upiId.trim(),pn:(profile.upiName||profile.businessName).trim(),am:payment.dueNow.toFixed(2),cu:activeCurrency,tn:`Invoice ${active.invoiceNo}`}).toString()}` : '';
  useEffect(()=>{localStorage.setItem('isp-invoices',JSON.stringify(invoices));},[invoices]);
  useEffect(()=>{localStorage.setItem('isp-profile',JSON.stringify(profile));},[profile]);
+ useEffect(()=>{if(!pdfDownload)return;return ()=>URL.revokeObjectURL(pdfDownload.url);},[pdfDownload]);
  const flash = msg => {setNotice(msg);window.setTimeout(()=>setNotice(''),4500)};
  function createInvoice(){
    const n = `INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`;
@@ -90,14 +94,21 @@ function App(){
    }
  }
  function duplicateInvoice(inv){
-   const copy={...inv,id:Date.now(),invoiceNo:`INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`,status:'Draft',items:inv.items.map(i=>({...i,id:Date.now()+Math.random()}))};
+   const copy={...inv,id:Date.now(),invoiceNo:`INV-${new Date().getFullYear()}-${String(invoices.length+1).padStart(3,'0')}`,status:'Draft',amountPaid:0,dueNow:'',items:inv.items.map(i=>({...i,id:Date.now()+Math.random()}))};
    setInvoices(old=>[copy,...old]);setActiveId(copy.id);setPage('editor');flash('Invoice duplicated');
  }
  function deleteInvoice(id){
    if(!confirm('Delete this invoice permanently from this browser?'))return;
    const next=invoices.filter(i=>i.id!==id);setInvoices(next);setActiveId(next[0]?.id||null);setPage('invoices');flash('Invoice deleted');
  }
- function markStatus(status){updateField('status',status);flash(`Invoice marked ${status.toLowerCase()}`);}
+ function markStatus(status){
+   const paymentDetails=active&&calculatePaymentBreakdown(active,calcTotal(active));
+   if(status==='Paid'&&paymentDetails?.balanceBeforeCurrentPayment>0){
+     flash('Record the remaining payments before marking this invoice Paid.');
+     return;
+   }
+   updateField('status',status);flash(`Invoice marked ${status.toLowerCase()}`);
+ }
  function emailInvoice(invoice){
    const recipient=invoice.clientEmail.trim();
    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)){
@@ -105,12 +116,18 @@ function App(){
      return;
    }
    const subject=`Invoice ${invoice.invoiceNo} from ${profile.businessName||'Your business'}`;
+   const invoiceTotal=calcTotal(invoice);
+   const paymentDetails=calculatePaymentBreakdown(invoice,invoiceTotal);
    const body=[
      `Hello ${invoice.clientName||'there'},`,
      '',
      `Please find the invoice details below for ${invoice.projectName||invoice.invoiceNo}.`,
      `Invoice: ${invoice.invoiceNo}`,
-     `Amount due: ${fmt(calcTotal(invoice),invoice.currency)}`,
+     `Project total: ${fmt(invoiceTotal,invoice.currency)}`,
+     `Initial payment received: -${fmt(paymentDetails.previouslyPaid,invoice.currency)}`,
+     `Balance after initial payment: ${fmt(paymentDetails.balanceBeforeCurrentPayment,invoice.currency)}`,
+     `Amount paying now: ${fmt(paymentDetails.dueNow,invoice.currency)}`,
+     `Balance remaining after this payment: ${fmt(paymentDetails.remainingAfterCurrentPayment,invoice.currency)}`,
      `Due date: ${invoice.dueDate||'Not specified'}`,
      '',
      'Please attach the invoice PDF before sending this email.',
@@ -120,6 +137,23 @@ function App(){
    ].join('\n');
    window.location.href=`mailto:${encodeURIComponent(recipient)}?${new URLSearchParams({subject,body}).toString()}`;
    flash('Opening your email app. Attach the invoice PDF before sending.');
+ }
+ async function downloadActivePdf(){
+   if(!active)return;
+   try{
+     const { downloadInvoicePdf } = await import('./invoicePdf.js');
+     const {blob,filename}=await downloadInvoicePdf({invoice:active,profile,subtotal:calcSubtotal(active),tax:calcTax(active),total:calcTotal(active),payment:calculatePaymentBreakdown(active,calcTotal(active)),upiUrl});
+     const url=URL.createObjectURL(blob);
+     setPdfDownload({url,filename});
+     const link=document.createElement('a');
+     link.href=url;
+     link.download=filename;
+     document.body.append(link);
+     link.click();
+     link.remove();
+   }catch(error){
+     flash(error instanceof Error ? `Could not download the invoice PDF: ${error.message}` : 'Could not download the invoice PDF.');
+   }
  }
  function newProfileField(k,v){setProfile(p=>({...p,[k]:v}));}
  const filtered = invoices.filter(inv=>(statusFilter==='All'||inv.status===statusFilter)&&`${inv.invoiceNo} ${inv.clientName} ${inv.projectName}`.toLowerCase().includes(search.toLowerCase()));
@@ -139,14 +173,15 @@ function App(){
    <header className="topbar no-print"><div className="crumb">WORKSPACE <span>/</span> {page==='editor'?'INVOICE EDITOR':page.toUpperCase()}</div><div className="top-right"><span className="local-badge"><span/> Local data</span><button className="btn btn-primary" onClick={createInvoice}><Plus size={16}/> New invoice</button></div></header>
    {page==='dashboard' && <Dashboard invoices={invoices} totalBilled={totalBilled} outstanding={outstanding} savedInvoices={savedInvoices} onCreate={createInvoice} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onAll={()=>setPage('invoices')}/>}
    {page==='invoices' && <section><PageHeading title="Invoices" subtitle="Create, manage and track your freelance project billing." action={<div className="invoice-create-actions"><input ref={quotationInput} className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={importQuotation}/><button className="btn btn-light" disabled={importingQuotation} onClick={()=>quotationInput.current?.click()}><Upload size={15}/>{importingQuotation?'Reading PDF...':'Import quotation PDF'}</button><button className="btn btn-primary" onClick={createInvoice}><Plus size={16}/> Create invoice</button></div>}/><p className="import-hint">Import a text-based quotation PDF to create a draft invoice. Check every field and amount before sending.</p><div className="toolbar"><div className="searchbox"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search invoice, client or project..."/></div><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All</option><option>Draft</option><option>Sent</option><option>Paid</option><option>Overdue</option></select></div><InvoiceList invoices={filtered} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onDuplicate={duplicateInvoice} onDelete={deleteInvoice}/></section>}
-   {page==='editor' && (active ? <Editor active={active} profile={profile} total={calcTotal(active)} subtotal={calcSubtotal(active)} tax={calcTax(active)} onChange={updateField} onItem={updateItem} onAdd={addItem} onRemove={removeItem} onBack={()=>setPage('invoices')} onSave={()=>{flash('Invoice auto-saved in this browser')}} onPreview={()=>setShowPreview(true)} onEmail={()=>emailInvoice(active)} onPayments={()=>setShowPayment(true)} onStatus={markStatus} onDelete={()=>deleteInvoice(active.id)} onDuplicate={()=>duplicateInvoice(active)} upiUrl={upiUrl}/> : <Empty title="No invoice selected" text="Create a new invoice to get started." action={createInvoice}/>)}
+   {page==='editor' && (active ? <Editor active={active} profile={profile} total={calcTotal(active)} payment={payment} subtotal={calcSubtotal(active)} tax={calcTax(active)} onChange={updateField} onItem={updateItem} onAdd={addItem} onRemove={removeItem} onBack={()=>setPage('invoices')} onSave={()=>{flash('Invoice auto-saved in this browser')}} onDownload={downloadActivePdf} onPreview={()=>setShowPreview(true)} onEmail={()=>emailInvoice(active)} onPayments={()=>setShowPayment(true)} onStatus={markStatus} onDelete={()=>deleteInvoice(active.id)} onDuplicate={()=>duplicateInvoice(active)} upiUrl={upiUrl}/> : <Empty title="No invoice selected" text="Create a new invoice to get started." action={createInvoice}/>)}
    {page==='payments' && <PaymentSetup profile={profile} set={newProfileField} save={()=>flash('Payment settings saved in this browser')}/>}
    {page==='settings' && <ProfileSetup profile={profile} set={newProfileField} save={()=>flash('Business profile saved')}/>}
    {page==='clients' && <Clients invoices={invoices} onOpen={inv=>{setActiveId(inv.id);setPage('editor')}} onCreate={createInvoice}/>}
   </main>
   {notice && <div className="toast"><CheckCircle2 size={17}/>{notice}</div>}
-  {showPreview&&active&&<Modal title="Invoice preview" close={()=>setShowPreview(false)} wide><div className="modal-actions no-print"><button className="btn btn-light" onClick={()=>window.print()}><Printer size={15}/> Print / Save PDF</button><button className="btn btn-primary" onClick={()=>setShowPreview(false)}>Done</button></div><InvoicePaper invoice={active} profile={profile} total={total} subtotal={subtotal} tax={tax} upiUrl={upiUrl}/></Modal>}
-  {showPayment&&active&&<Modal title="Payment instructions" close={()=>setShowPayment(false)}><div className="payment-modal"><p>These details will appear on the invoice PDF. Verify all details before sharing.</p>{(profile.qrImage || upiUrl) && <div className="qr-center">{profile.qrImage ? <img src={profile.qrImage} alt="Custom QR code" style={{width:150,height:150,objectFit:'contain',borderRadius:8,border:'1px solid #e8ebf2',background:'#fff'}}/> : <QRCodeSVG value={upiUrl} size={150} includeMargin/>}<strong>{profile.upiId}</strong><small>UPI · {fmt(total,active.currency)}</small></div>}<BankDetails profile={profile}/><button className="btn btn-primary full" onClick={()=>{setShowPayment(false);flash('Payment instructions are included in the invoice preview')}}>Done</button></div></Modal>}
+  {pdfDownload && <div className="pdf-ready" role="status"><span>Invoice PDF is ready.</span><a href={pdfDownload.url} download={pdfDownload.filename}><Download size={15}/> Download PDF</a></div>}
+  {showPreview&&active&&<Modal title="Invoice preview" close={()=>setShowPreview(false)} wide><div className="modal-actions no-print"><button className="btn btn-primary" onClick={downloadActivePdf}><Download size={15}/> Download PDF</button><button className="btn btn-light" onClick={()=>setShowPreview(false)}>Done</button></div><InvoicePaper invoice={active} profile={profile} total={total} payment={payment} subtotal={subtotal} tax={tax} upiUrl={upiUrl}/></Modal>}
+  {showPayment&&active&&<Modal title="Payment instructions" close={()=>setShowPayment(false)}><div className="payment-modal"><p>These details will appear on the invoice PDF. Verify all details before sharing.</p>{(profile.qrImage || upiUrl) && <div className="qr-center">{profile.qrImage ? <img src={profile.qrImage} alt="Custom QR code" style={{width:150,height:150,objectFit:'contain',borderRadius:8,border:'1px solid #e8ebf2',background:'#fff'}}/> : <QRCodeSVG value={upiUrl} size={150} includeMargin/>}<strong>{profile.upiId}</strong><small>UPI · {fmt(payment?.dueNow||0,active.currency)}</small></div>}<BankDetails profile={profile}/><button className="btn btn-primary full" onClick={()=>{setShowPayment(false);flash('Payment instructions are included in the invoice preview')}}>Done</button></div></Modal>}
  </div>;
 }
 function calcSubtotal(inv){return inv.items.reduce((s,it)=>s+Number(it.quantity||0)*Number(it.rate||0),0)}
@@ -166,29 +201,45 @@ function Dashboard({invoices,totalBilled,outstanding,savedInvoices,onCreate,onOp
 }
 function InvoiceList({invoices,onOpen,onDuplicate,onDelete,compact=false}){
  if(!invoices.length)return <div className="empty-list">No invoices match your search.</div>;
- return <div className="table-card"><div className="table-scroll"><table className="data-table"><thead><tr><th>INVOICE</th><th>CLIENT / PROJECT</th><th>ISSUED</th><th>AMOUNT</th><th>STATUS</th><th></th></tr></thead><tbody>{invoices.map(inv=><tr key={inv.id} onClick={()=>onOpen(inv)}><td><strong>{inv.invoiceNo}</strong><small>{inv.currency}</small></td><td><strong>{inv.clientName||'Unnamed client'}</strong><small>{inv.projectName||inv.items[0]?.description||'Project work'}</small></td><td>{inv.issueDate||'—'}</td><td className="money-cell">{fmt(calcTotal(inv),inv.currency)}</td><td><Status status={inv.status}/></td><td><button className="row-action" title="Open invoice" onClick={e=>{e.stopPropagation();onOpen(inv)}}><ArrowUpRight size={16}/></button></td></tr>)}</tbody></table></div></div>;
+ return <div className="table-card"><div className="table-scroll"><table className="data-table"><thead><tr><th>INVOICE</th><th>CLIENT / PROJECT</th><th>ISSUED</th><th>PAYING NOW</th><th>STATUS</th><th></th></tr></thead><tbody>{invoices.map(inv=><tr key={inv.id} onClick={()=>onOpen(inv)}><td><strong>{inv.invoiceNo}</strong><small>{inv.currency}</small></td><td><strong>{inv.clientName||'Unnamed client'}</strong><small>{inv.projectName||inv.items[0]?.description||'Project work'}</small></td><td>{inv.issueDate||'—'}</td><td className="money-cell">{fmt(calculatePaymentBreakdown(inv,calcTotal(inv)).dueNow,inv.currency)}</td><td><Status status={inv.status}/></td><td><button className="row-action" title="Open invoice" onClick={e=>{e.stopPropagation();onOpen(inv)}}><ArrowUpRight size={16}/></button></td></tr>)}</tbody></table></div></div>;
 }
 function Status({status}){return <span className={`status status-${String(status).toLowerCase()}`}>{status}</span>}
 function Empty({title,text,action}){return <div className="empty-state"><div className="empty-icon"><FileText size={26}/></div><h3>{title}</h3><p>{text}</p>{action&&<button className="btn btn-primary" onClick={action}><Plus size={16}/> Create invoice</button>}</div>}
-function Editor({active,profile,total,subtotal,tax,onChange,onItem,onAdd,onRemove,onBack,onSave,onPreview,onEmail,onPayments,onStatus,onDelete,onDuplicate,upiUrl}){
+function Editor({active,profile,total,payment,subtotal,tax,onChange,onItem,onAdd,onRemove,onBack,onSave,onDownload,onPreview,onEmail,onPayments,onStatus,onDelete,onDuplicate,upiUrl}){
  const set=(k,v)=>onChange(k,v);
  const discount=Math.max(0,Number(active.discount||0));
- return <section className="editor-page"><div className="editor-head no-print"><button className="back-link" onClick={onBack}>← All invoices</button><div className="editor-actions"><button className="btn btn-light" onClick={onDuplicate}><Copy size={15}/> Duplicate</button><button className="btn btn-light" onClick={onPreview}><Eye size={15}/> Preview</button><button className="btn btn-light" disabled={!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(active.clientEmail||'')} title={active.clientEmail?'Open a prefilled email for this invoice':'Add a valid client email in Client details first'} onClick={onEmail}><Mail size={15}/> Email invoice</button><button className="btn btn-primary" onClick={()=>{onSave();window.print()}}><Printer size={15}/> Print / PDF</button></div></div>
+ function setPaymentAmount(key,value){
+  if(value===''){
+   set(key,key==='dueNow'?'':0);
+   return;
+  }
+  const max=key==='amountPaid'?total:Math.max(0,total-payment.previouslyPaid);
+  const amount=Math.min(Math.max(0,Number(value)||0),max);
+  if(key==='amountPaid'){
+   onChange('amountPaid',amount);
+   if(active.dueNow!=null&&active.dueNow!==''){
+    onChange('dueNow',Math.min(amount===total?0:Math.max(0,total-amount),Math.max(0,Number(active.dueNow)||0)));
+   }
+   return;
+  }
+  set(key,amount);
+ }
+ return <section className="editor-page"><div className="editor-head no-print"><button className="back-link" onClick={onBack}>← All invoices</button><div className="editor-actions"><button className="btn btn-light" onClick={onDuplicate}><Copy size={15}/> Duplicate</button><button className="btn btn-light" onClick={onPreview}><Eye size={15}/> Preview</button><button className="btn btn-light" disabled={!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(active.clientEmail||'')} title={active.clientEmail?'Open a prefilled email for this invoice':'Add a valid client email in Client details first'} onClick={onEmail}><Mail size={15}/> Email invoice</button><button className="btn btn-primary" onClick={()=>{onSave();onDownload()}}><Download size={15}/> Download PDF</button></div></div>
  <PageHeading title={active.invoiceNo} subtitle="Edit invoice details, project work, rates and payment methods." action={<Status status={active.status}/>}/>
  <div className="editor-layout"><div className="edit-forms">
-  <div className="panel"><PanelHeading icon={<FileText size={18}/>} title="Invoice details" desc="Invoice number, dates and currency."/><div className="form-grid"><Field label="Invoice number" value={active.invoiceNo} onChange={v=>set('invoiceNo',v)}/><Field label="Project / engagement" value={active.projectName} onChange={v=>set('projectName',v)} placeholder="e.g. Website development"/><Field label="Issue date" value={active.issueDate} onChange={v=>set('issueDate',v)} type="date"/><Field label="Due date" value={active.dueDate} onChange={v=>set('dueDate',v)} type="date"/><Field label="Invoice currency" value={active.currency} onChange={v=>set('currency',v)} select options={currencies.map(c=>[c.code,`${c.code} — ${c.label}`])}/><Field label="Status" value={active.status} onChange={v=>set('status',v)} select options={['Draft','Sent','Paid','Overdue'].map(s=>[s,s])}/></div></div>
+  <div className="panel"><PanelHeading icon={<FileText size={18}/>} title="Invoice details" desc="Invoice number, dates and currency."/><div className="form-grid"><Field label="Invoice number" value={active.invoiceNo} onChange={v=>set('invoiceNo',v)}/><Field label="Project / engagement" value={active.projectName} onChange={v=>set('projectName',v)} placeholder="e.g. Website development"/><Field label="Issue date" value={active.issueDate} onChange={v=>set('issueDate',v)} type="date"/><Field label="Due date" value={active.dueDate} onChange={v=>set('dueDate',v)} type="date"/><Field label="Invoice currency" value={active.currency} onChange={v=>set('currency',v)} select options={currencies.map(c=>[c.code,`${c.code} — ${c.label}`])}/><Field label="Status" value={active.status} onChange={onStatus} select options={['Draft','Sent','Paid','Overdue'].map(s=>[s,s])}/></div></div>
   <div className="panel"><PanelHeading icon={<UserRound size={18}/>} title="Client details" desc="Who is this invoice for?"/><div className="form-grid"><Field label="Client / company name" value={active.clientName} onChange={v=>set('clientName',v)} placeholder="Client or company"/><Field label="Client email" value={active.clientEmail} onChange={v=>set('clientEmail',v)} placeholder="client@example.com" type="email"/><Field label="Billing address" value={active.clientAddress} onChange={v=>set('clientAddress',v)} placeholder="Client billing address" wide/></div></div>
   <div className="panel"><PanelHeading icon={<BriefcaseBusiness size={18}/>} title="Work items" desc="Bill by hours, days, milestones or other units."/><div className="line-head"><span>DESCRIPTION</span><span>QTY / HRS</span><span>RATE ({active.currency})</span><span>AMOUNT</span><span/></div>{active.items.map(item=><div className="line-edit" key={item.id}><div className="line-description"><input value={item.description} onChange={e=>onItem(item.id,'description',e.target.value)} placeholder="Development, bug fixes, consultation..."/><input className="detail-input" value={item.details} onChange={e=>onItem(item.id,'details',e.target.value)} placeholder="Optional detail / deliverable"/></div><input type="number" min="0" step=".25" value={item.quantity} onChange={e=>onItem(item.id,'quantity',e.target.value)}/><input type="number" min="0" step=".01" value={item.rate} onChange={e=>onItem(item.id,'rate',e.target.value)}/><strong>{fmt(Number(item.quantity||0)*Number(item.rate||0),active.currency)}</strong><button className="remove-line" title="Remove item" onClick={()=>onRemove(item.id)}><Trash2 size={15}/></button></div>)}<button className="add-row" onClick={onAdd}><Plus size={15}/> Add work item</button>
-   <div className="calc-box"><div className="calc-fields"><Field label="Discount amount" value={active.discount} onChange={v=>set('discount',v)} type="number"/><Field label="Tax / GST (%)" value={active.taxPercent} onChange={v=>set('taxPercent',v)} type="number"/></div><div className="calc-row"><span>Subtotal</span><strong>{fmt(subtotal,active.currency)}</strong></div>{discount>0&&<div className="calc-row"><span>Discount</span><strong>−{fmt(discount,active.currency)}</strong></div>}<div className="calc-row"><span>Tax ({Number(active.taxPercent||0)}%)</span><strong>{fmt(tax,active.currency)}</strong></div><div className="calc-row final"><span>Total due</span><strong>{fmt(total,active.currency)}</strong></div></div>
+   <div className="calc-box"><div className="calc-fields"><Field label="Discount amount" value={active.discount} onChange={v=>set('discount',v)} type="number"/><Field label="Tax / GST (%)" value={active.taxPercent} onChange={v=>set('taxPercent',v)} type="number"/><Field label="Initial payment received" value={payment.previouslyPaid} onChange={v=>setPaymentAmount('amountPaid',v)} type="number" min="0" max={total}/><Field label="Amount paying now" value={active.dueNow??''} onChange={v=>setPaymentAmount('dueNow',v)} type="number" min="0" max={Math.max(0,total-payment.previouslyPaid)} placeholder="Enter amount to collect"/></div><div className="calc-row"><span>Subtotal</span><strong>{fmt(subtotal,active.currency)}</strong></div>{discount>0&&<div className="calc-row"><span>Discount</span><strong>−{fmt(discount,active.currency)}</strong></div>}<div className="calc-row"><span>Tax ({Number(active.taxPercent||0)}%)</span><strong>{fmt(tax,active.currency)}</strong></div><div className="calc-row final"><span>Project total</span><strong>{fmt(total,active.currency)}</strong></div><div className="calc-row payment-deduction"><span>Initial payment received</span><strong>−{fmt(payment.previouslyPaid,active.currency)}</strong></div><div className="calc-row"><span>Balance before this payment</span><strong>{fmt(payment.balanceBeforeCurrentPayment,active.currency)}</strong></div><div className="calc-row installment-now"><span>Amount paying now</span><strong>{fmt(payment.dueNow,active.currency)}</strong></div><div className="calc-row"><span>Balance remaining after this payment</span><strong>{fmt(payment.remainingAfterCurrentPayment,active.currency)}</strong></div></div>
   </div>
   <div className="panel"><PanelHeading icon={<CreditCard size={18}/>} title="Payment & notes" desc="Payment instructions are included in the invoice preview."/><div className="payment-short"><div><div className="mini-icon violet"><CreditCard size={17}/></div><div><strong>UPI QR code</strong><small>{profile.upiId||'Add your UPI ID in Payment setup'}</small></div></div><div><div className="mini-icon green"><Landmark size={17}/></div><div><strong>Bank transfer</strong><small>{profile.bankName||'Add bank details in Payment setup'}</small></div></div><button className="btn btn-light" onClick={onPayments}>Manage payment details <ArrowUpRight size={14}/></button></div><Field label="Notes / payment terms" value={active.notes} onChange={v=>set('notes',v)} multiline placeholder="Payment terms, thanks, reference number..."/></div>
   <div className="editor-bottom no-print"><button className="btn btn-danger" onClick={onDelete}><Trash2 size={15}/> Delete invoice</button><button className="btn btn-primary" onClick={onSave}><CheckCircle2 size={15}/> Save invoice</button></div>
- </div><aside className="preview-side"><div className="preview-sticky"><div className="preview-side-head"><div><span className="eyebrow">LIVE PREVIEW</span><h3>Client-ready invoice</h3></div><button className="icon-button" onClick={onPreview}><Eye size={17}/></button></div><InvoicePaper invoice={active} profile={profile} total={total} subtotal={subtotal} tax={tax} upiUrl={upiUrl}/><button className="btn btn-primary full no-print" onClick={onPreview}><Eye size={15}/> Open full preview</button><p className="safe-note"><ShieldCheck size={14}/> Verify payment in your banking app before marking Paid.</p></div></aside></div>
+ </div><aside className="preview-side"><div className="preview-sticky"><div className="preview-side-head"><div><span className="eyebrow">LIVE PREVIEW</span><h3>Client-ready invoice</h3></div><button className="icon-button" onClick={onPreview}><Eye size={17}/></button></div><InvoicePaper invoice={active} profile={profile} total={total} payment={payment} subtotal={subtotal} tax={tax} upiUrl={upiUrl}/><button className="btn btn-primary full no-print" onClick={onPreview}><Eye size={15}/> Open full preview</button><p className="safe-note"><ShieldCheck size={14}/> Verify payment in your banking app before marking Paid.</p></div></aside></div>
  </section>;
 }
 function PanelHeading({icon,title,desc}){return <div className="panel-heading"><div className="panel-icon">{icon}</div><div><h3>{title}</h3><p>{desc}</p></div></div>}
-function Field({label,value,onChange,placeholder='',type='text',multiline=false,select=false,options=[],wide=false}){
- return <label className={`field ${wide?'wide':''}`}><span>{label}</span>{select?<select value={value??''} onChange={e=>onChange(e.target.value)}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea value={value??''} onChange={e=>onChange(e.target.value)} rows="3" placeholder={placeholder}/>:<input type={type} value={value??''} onChange={e=>onChange(e.target.value)} placeholder={placeholder}/>}</label>;
+function Field({label,value,onChange,placeholder='',type='text',multiline=false,select=false,options=[],wide=false,min,max}){
+ return <label className={`field ${wide?'wide':''}`}><span>{label}</span>{select?<select value={value??''} onChange={e=>onChange(e.target.value)}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea value={value??''} onChange={e=>onChange(e.target.value)} rows="3" placeholder={placeholder}/>:<input type={type} min={min} max={max} step={type==='number'?'any':undefined} value={value??''} onChange={e=>onChange(e.target.value)} placeholder={placeholder}/>}</label>;
 }
 function PaymentSetup({profile,set,save}){
  const uploadQr = (event) => {
@@ -212,9 +263,56 @@ function BankDetails({profile}){
  if(!profile.accountNumber&&!profile.ifsc&&!profile.bankName)return <div className="empty-bank">Bank transfer details not configured yet.</div>;
  return <div className="bank-details-modal">{[['Account name',profile.accountName||profile.businessName],['Bank',profile.bankName],['Account number',profile.accountNumber],['IFSC',profile.ifsc]].filter(x=>x[1]).map(([k,v])=><div key={k}><span>{k}</span><strong>{v}</strong></div>)}</div>;
 }
-function InvoicePaper({invoice,profile,total,subtotal,tax,upiUrl}){
+function InvoicePaper({invoice,profile,total,payment,subtotal,tax,upiUrl}){
  const discount=Math.max(0,Number(invoice.discount||0));
- return <article className="invoice-paper"><div className="paper-head"><div><div className="paper-logo"><ReceiptText size={16}/></div><h3>{profile.businessName||'Your Business'}</h3>{profile.address&&<p>{profile.address}</p>}<p>{profile.email}{profile.phone?` · ${profile.phone}`:''}</p></div><div className="paper-invoice-title"><span>INVOICE</span><strong>{invoice.invoiceNo}</strong><small>ISSUED {invoice.issueDate||'—'}</small><small>DUE {invoice.dueDate||'—'}</small></div></div><div className="paper-rule"/><div className="paper-meta"><div><label>BILL TO</label><strong>{invoice.clientName||'Client name'}</strong>{invoice.clientEmail&&<p>{invoice.clientEmail}</p>}{invoice.clientAddress&&<p>{invoice.clientAddress}</p>}</div><div><label>PROJECT</label><strong>{invoice.projectName||invoice.items[0]?.description||'Project work'}</strong><p>Currency: {invoice.currency}</p></div></div><table className="paper-table"><thead><tr><th>DESCRIPTION</th><th>QTY</th><th>RATE</th><th>AMOUNT</th></tr></thead><tbody>{invoice.items.map(it=><tr key={it.id}><td><strong>{it.description||'Work item'}</strong>{it.details&&<small>{it.details}</small>}</td><td>{Number(it.quantity||0)}</td><td>{fmt(it.rate,invoice.currency)}</td><td>{fmt(Number(it.quantity||0)*Number(it.rate||0),invoice.currency)}</td></tr>)}</tbody></table><div className="paper-totals"><div><span>Subtotal</span><strong>{fmt(subtotal,invoice.currency)}</strong></div>{discount>0&&<div><span>Discount</span><strong>−{fmt(discount,invoice.currency)}</strong></div>}<div><span>Tax ({Number(invoice.taxPercent||0)}%)</span><strong>{fmt(tax,invoice.currency)}</strong></div><div className="paper-grand"><span>Total due</span><strong>{fmt(total,invoice.currency)}</strong></div></div><div className="paper-payment"><h4>PAYMENT OPTIONS</h4><div className="paper-pay-grid"><div className="paper-pay-card"><div className="paper-pay-title"><CreditCard size={12}/> UPI PAYMENT</div>{(profile.qrImage || (profile.upiId&&upiUrl)) ? <><div className="paper-qr">{profile.qrImage ? <img src={profile.qrImage} alt="Custom QR code" style={{width:98,height:98,objectFit:'contain',borderRadius:8,border:'1px solid #e8ebf2',background:'#fff'}}/> : <QRCodeSVG value={upiUrl} size={98} includeMargin/>}</div><strong>{profile.upiName||profile.businessName}</strong><p>{profile.upiId}</p><small>Scan with a compatible UPI app</small></>:<div className="paper-placeholder">Add your UPI ID in Payment setup.</div>}</div><div className="paper-pay-card"><div className="paper-pay-title"><Landmark size={12}/> BANK TRANSFER</div>{(profile.accountNumber||profile.ifsc||profile.bankName)?<div className="paper-bank">{[['Account name',profile.accountName||profile.businessName],['Bank',profile.bankName],['Account no.',profile.accountNumber],['IFSC',profile.ifsc]].filter(x=>x[1]).map(([k,v])=><div key={k}><span>{k}</span><strong>{v}</strong></div>)}</div>:<div className="paper-placeholder">Add bank details in Payment setup.</div>}</div></div></div>{invoice.notes&&<div className="paper-notes"><strong>NOTES / TERMS</strong><p>{invoice.notes}</p></div>}<div className="paper-footer">Thank you for your business · Please include invoice number with your payment.</div></article>;
+ return <article className="invoice-paper">
+  <div className="paper-head">
+   <div>
+    <div className="paper-logo"><ReceiptText size={16}/></div>
+    <h3>{profile.businessName||'Your Business'}</h3>
+    {profile.address&&<p>{profile.address}</p>}
+    {(profile.email||profile.phone)&&<p>{[profile.email,profile.phone].filter(Boolean).join(' · ')}</p>}
+   </div>
+   <div className="paper-invoice-title"><span>INVOICE</span><strong>{invoice.invoiceNo}</strong><small>ISSUED {invoice.issueDate||'—'}</small><small>DUE {invoice.dueDate||'—'}</small></div>
+  </div>
+  <div className="paper-rule"/>
+  <div className="paper-meta">
+   <div><label>BILL TO</label><strong>{invoice.clientName||'Client name'}</strong>{invoice.clientEmail&&<p>{invoice.clientEmail}</p>}{invoice.clientAddress&&<p>{invoice.clientAddress}</p>}</div>
+   <div><label>PROJECT</label><strong>{invoice.projectName||invoice.items[0]?.description||'Project work'}</strong><p>Currency: {invoice.currency}</p></div>
+  </div>
+  <table className="paper-table">
+   <thead><tr><th>DESCRIPTION</th><th>QTY</th><th>RATE</th><th>AMOUNT</th></tr></thead>
+   <tbody>{invoice.items.map(item=><tr key={item.id}><td><strong>{item.description||'Work item'}</strong>{item.details&&<small>{item.details}</small>}</td><td>{Number(item.quantity||0)}</td><td>{fmt(item.rate,invoice.currency)}</td><td>{fmt(Number(item.quantity||0)*Number(item.rate||0),invoice.currency)}</td></tr>)}</tbody>
+  </table>
+  <div className="paper-totals">
+   <div><span>Subtotal</span><strong>{fmt(subtotal,invoice.currency)}</strong></div>
+   {discount>0&&<div><span>Discount</span><strong>−{fmt(discount,invoice.currency)}</strong></div>}
+   <div><span>Tax ({Number(invoice.taxPercent||0)}%)</span><strong>{fmt(tax,invoice.currency)}</strong></div>
+   <div><span>Project total</span><strong>{fmt(total,invoice.currency)}</strong></div>
+   <div className="paper-deduction"><span>Initial payment received</span><strong>−{fmt(payment.previouslyPaid,invoice.currency)}</strong></div>
+   <div><span>Balance before this payment</span><strong>{fmt(payment.balanceBeforeCurrentPayment,invoice.currency)}</strong></div>
+   <div><span>Balance remaining after payment</span><strong>{fmt(payment.remainingAfterCurrentPayment,invoice.currency)}</strong></div>
+   <div className="paper-grand"><span>Amount paying now</span><strong>{fmt(payment.dueNow,invoice.currency)}</strong></div>
+  </div>
+  <div className="paper-payment">
+   <h4>PAYMENT OPTIONS</h4>
+   <div className="paper-pay-grid">
+    <div className="paper-pay-card">
+     <div className="paper-pay-title"><CreditCard size={12}/> UPI PAYMENT</div>
+     {(profile.qrImage||upiUrl)?<><div className="paper-qr">{profile.qrImage?<img src={profile.qrImage} alt="Custom QR code" style={{width:98,height:98,objectFit:'contain',borderRadius:8,border:'1px solid #e8ebf2',background:'#fff'}}/>:<QRCodeSVG value={upiUrl} size={98} includeMargin/>}</div><strong>{profile.upiName||profile.businessName}</strong>{profile.upiId&&<p>{profile.upiId}</p>}<small>Scan to pay {fmt(payment.dueNow,invoice.currency)}</small></>:<div className="paper-placeholder">Add your UPI ID in Payment setup.</div>}
+    </div>
+    <div className="paper-pay-card">
+     <div className="paper-pay-title"><Landmark size={12}/> BANK TRANSFER</div>
+     {(profile.accountNumber||profile.ifsc||profile.bankName)?<div className="paper-bank">{[['Account name',profile.accountName||profile.businessName],['Bank',profile.bankName],['Account no.',profile.accountNumber],['IFSC',profile.ifsc]].filter(([,value])=>value).map(([label,value])=><div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>:<div className="paper-placeholder">Add bank details in Payment setup.</div>}
+    </div>
+   </div>
+  </div>
+  <div className="paper-notes">
+   <strong>NOTES / TERMS</strong>
+   <p>{invoice.notes?.trim()||'No notes added.'}</p>
+  </div>
+  <div className="paper-footer">Thank you for your business · Please include invoice number with your payment.</div>
+ </article>;
 }
 function Modal({title,close,children,wide=false}){return <div className="modal-backdrop no-print" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><div className={`modal ${wide?'modal-wide':''}`}><div className="modal-head"><h2>{title}</h2><button className="icon-button" onClick={close}><X size={18}/></button></div><div className="modal-body">{children}</div></div></div>}
 export default App;

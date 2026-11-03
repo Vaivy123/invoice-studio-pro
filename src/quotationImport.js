@@ -3,6 +3,7 @@ import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { parseZibixoQuotation } from './quotationParser.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+pdfjsLib.GlobalWorkerOptions.workerPort = new Worker(pdfjsWorker, { type: 'module' });
 
 const currencyCodes = [
   ['CA$', 'CAD'], ['CAD', 'CAD'], ['A$', 'AUD'], ['AUD', 'AUD'],
